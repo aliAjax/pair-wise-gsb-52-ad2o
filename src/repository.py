@@ -83,6 +83,11 @@ class Repository:
             raise NotFound("记录不存在")
         return self._row(row)
 
+    def find_by_reference(self, reference: str) -> Optional[Dict[str, Any]]:
+        with self._connect() as connection:
+            row = connection.execute("SELECT * FROM records WHERE reference=?", (reference,)).fetchone()
+        return self._row(row) if row else None
+
     def list_records(self, state: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
         limit = max(1, min(int(limit), 500))
         with self._connect() as connection:

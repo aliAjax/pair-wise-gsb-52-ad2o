@@ -4,7 +4,7 @@ import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from .domain import Actor, DomainError, PermissionDenied, ValidationError
 
@@ -12,9 +12,14 @@ from .domain import Actor, DomainError, PermissionDenied, ValidationError
 RECORD_RE = re.compile(r"^/api/records/(\d+)$")
 ACTION_RE = re.compile(r"^/api/records/(\d+)/actions/([a-z_]+)$")
 AUDIT_RE = re.compile(r"^/api/records/(\d+)/audit$")
+CONSENT_RE = re.compile(r"^/api/consents/(\d+)/withdraw$")
+BATCH_RE = re.compile(r"^/api/batches/([A-Za-z0-9][A-Za-z0-9._-]*)$")
+BATCH_RESUME_RE = re.compile(r"^/api/batches/([A-Za-z0-9][A-Za-z0-9._-]*)/resume$")
+PLAN_SNAPSHOT_RE = re.compile(r"^/api/plans/([^/]+)/snapshots$")
+PLAN_RECON_RE = re.compile(r"^/api/plans/([^/]+)/reconciliation$")
 
 
-def make_handler(service: Any, static_dir: Path):
+def make_handler(service: Any, static_dir: Path, recon: Any = None):
     class Handler(BaseHTTPRequestHandler):
         server_version = "special-education/1.0"
 
@@ -87,6 +92,19 @@ def make_handler(service: Any, static_dir: Path):
                 if parsed.path == "/api/stats":
                     self._send(200, service.stats(self._actor()))
                     return
+                if recon is not None and parsed.path == "/api/consents":
+                    query = parse_qs(parsed.query)
+                    self._send(200, {"items": recon.list_consents(self._actor(), plan_reference=query.get("plan_reference", [None])[0])})
+                    return
+                if recon is not None:
+                    match = BATCH_RE.match(parsed.path)
+                    if match:
+                        self._send(200, recon.get_batch(self._actor(), match.group(1)))
+                        return
+                    match = PLAN_RECON_RE.match(parsed.path)
+                    if match:
+                        self._send(200, recon.reconciliation(self._actor(), unquote(match.group(1))))
+                        return
                 self._send(404, {"error": "not_found", "message": "路径不存在"})
             except Exception as exc:
                 self._handle_error(exc)
@@ -107,6 +125,25 @@ def make_handler(service: Any, static_dir: Path):
                     record = service.act(self._actor(), int(match.group(1)), version, match.group(2), body.get("data", {}))
                     self._send(200, record)
                     return
+                if recon is not None:
+                    if parsed.path == "/api/consents":
+                        self._send(201, recon.register_consent(self._actor(), body))
+                        return
+                    match = CONSENT_RE.match(parsed.path)
+                    if match:
+                        self._send(200, recon.withdraw_consent(self._actor(), int(match.group(1)), body))
+                        return
+                    if parsed.path == "/api/batches":
+                        self._send(200, recon.submit_batch(self._actor(), body))
+                        return
+                    match = BATCH_RESUME_RE.match(parsed.path)
+                    if match:
+                        self._send(200, recon.resume_batch(self._actor(), match.group(1), body))
+                        return
+                    match = PLAN_SNAPSHOT_RE.match(parsed.path)
+                    if match:
+                        self._send(201, recon.create_snapshot(self._actor(), unquote(match.group(1))))
+                        return
                 self._send(404, {"error": "not_found", "message": "路径不存在"})
             except Exception as exc:
                 self._handle_error(exc)
@@ -114,5 +151,5 @@ def make_handler(service: Any, static_dir: Path):
     return Handler
 
 
-def create_server(host: str, port: int, service: Any, static_dir: Path) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer((host, port), make_handler(service, static_dir))
+def create_server(host: str, port: int, service: Any, static_dir: Path, recon: Any = None) -> ThreadingHTTPServer:
+    return ThreadingHTTPServer((host, port), make_handler(service, static_dir, recon))
