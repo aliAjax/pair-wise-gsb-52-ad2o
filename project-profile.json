@@ -1,0 +1,11 @@
+{
+  "projectId": "pair-wise-gsb-52",
+  "projectName": "pair-wise-gsb-52",
+  "category": "地狱 Python 模块化项目",
+  "businessDomain": "特殊教育",
+  "projectForm": "完整项目",
+  "codeScope": "backend, frontend",
+  "languages": ["Python", "HTML", "CSS", "JavaScript"],
+  "summary": "特殊教育支持计划合规服务，覆盖监护人同意、服务履约、复查期限和计划版本。",
+  "containerized": false
+}
