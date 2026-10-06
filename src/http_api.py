@@ -6,12 +6,17 @@ from pathlib import Path
 from typing import Any, Dict
 from urllib.parse import parse_qs, urlparse
 
-from .domain import Actor, DomainError, PermissionDenied, ValidationError
+from .domain import Actor, BatchInterrupted, DomainError, PermissionDenied, ValidationError
 
 
 RECORD_RE = re.compile(r"^/api/records/(\d+)$")
 ACTION_RE = re.compile(r"^/api/records/(\d+)/actions/([a-z_]+)$")
 AUDIT_RE = re.compile(r"^/api/records/(\d+)/audit$")
+RECEIPTS_RE = re.compile(r"^/api/records/(\d+)/receipts$")
+BATCHES_RE = re.compile(r"^/api/records/(\d+)/receipt-batches$")
+SNAPSHOTS_RE = re.compile(r"^/api/records/(\d+)/snapshots$")
+BATCH_SUBMIT_RE = re.compile(r"^/api/records/(\d+)/receipt-batches$")
+BATCH_RESUME_RE = re.compile(r"^/api/receipt-batches/([^/]+)/resume$")
 
 
 def make_handler(service: Any, static_dir: Path):
@@ -57,7 +62,12 @@ def make_handler(service: Any, static_dir: Path):
 
         def _handle_error(self, exc: Exception) -> None:
             if isinstance(exc, DomainError):
-                self._send(exc.status, {"error": exc.code, "message": str(exc)})
+                payload = {"error": exc.code, "message": str(exc)}
+                if isinstance(exc, BatchInterrupted):
+                    payload["batch_ref"] = exc.reference
+                    payload["checkpoint"] = exc.checkpoint
+                    payload["resume_hint"] = "POST /api/receipt-batches/%s/resume" % exc.reference
+                self._send(exc.status, payload)
             else:
                 self._send(500, {"error": "internal_error", "message": "服务内部错误"})
 
@@ -84,6 +94,19 @@ def make_handler(service: Any, static_dir: Path):
                 if match:
                     self._send(200, {"items": service.timeline(self._actor(), int(match.group(1)))})
                     return
+                match = RECEIPTS_RE.match(parsed.path)
+                if match:
+                    self._send(200, {"items": service.list_receipts(self._actor(), int(match.group(1)))})
+                    return
+                match = BATCHES_RE.match(parsed.path)
+                if match:
+                    items = service.list_batches(self._actor(), int(match.group(1)))
+                    self._send(200, {"items": items})
+                    return
+                match = SNAPSHOTS_RE.match(parsed.path)
+                if match:
+                    self._send(200, {"items": service.snapshots(self._actor(), int(match.group(1)))})
+                    return
                 if parsed.path == "/api/stats":
                     self._send(200, service.stats(self._actor()))
                     return
@@ -106,6 +129,22 @@ def make_handler(service: Any, static_dir: Path):
                         raise ValidationError("expected_version必须是整数")
                     record = service.act(self._actor(), int(match.group(1)), version, match.group(2), body.get("data", {}))
                     self._send(200, record)
+                    return
+                match = BATCH_SUBMIT_RE.match(parsed.path)
+                if match:
+                    version = body.get("expected_version")
+                    if not isinstance(version, int):
+                        raise ValidationError("expected_version必须是整数")
+                    summary = service.submit_batch(
+                        self._actor(), int(match.group(1)), version,
+                        body.get("batch_ref", ""), body.get("receipts", []),
+                    )
+                    self._send(200, summary)
+                    return
+                match = BATCH_RESUME_RE.match(parsed.path)
+                if match:
+                    summary = service.resume_batch(self._actor(), match.group(1))
+                    self._send(200, summary)
                     return
                 self._send(404, {"error": "not_found", "message": "路径不存在"})
             except Exception as exc:

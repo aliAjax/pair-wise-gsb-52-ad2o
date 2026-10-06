@@ -1,11 +1,22 @@
 """领域基础类型与输入校验。"""
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Dict, List
 
 
 class DomainError(Exception):
     status = 400
     code = "domain_error"
+
+
+class BatchInterrupted(DomainError):
+    status = 500
+    code = "batch_interrupted"
+
+    def __init__(self, reference: str, checkpoint: int) -> None:
+        super().__init__("批次%s在检查点%s中断，可续作重试" % (reference, checkpoint))
+        self.reference = reference
+        self.checkpoint = checkpoint
 
 
 class ValidationError(DomainError):
@@ -95,3 +106,16 @@ def text_list(data: Dict[str, Any], key: str, minimum: int = 0) -> List[str]:
     if len(value) < minimum:
         raise ValidationError("%s至少需要%s项" % (key, minimum))
     return [item.strip() for item in value]
+
+
+def iso_date(data: Dict[str, Any], key: str) -> str:
+    value = text(data, key)
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError as exc:
+        raise ValidationError("%s必须是YYYY-MM-DD日期" % key) from exc
+    return value
+
+
+def today() -> str:
+    return datetime.utcnow().date().isoformat()
